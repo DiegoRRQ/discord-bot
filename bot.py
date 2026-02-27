@@ -228,23 +228,19 @@ async def on_message(message):
         )
         return
 
-    # ---- FAKE‑ME GLOBAL ----
-    if (
-        fake_me_enabled
-        and status != "dnd"
-        and should_fakeme_reply(message)
-        and random.random() < WEBHOOK_REPLY_CHANCE
-        and message.author.id != last_impersonated_user
-    ):
-        uid = message.author.id
+# ---- FAKE‑ME GLOBAL ----
+if fake_me_enabled and status != "dnd" and should_fakeme_reply(message):
+    uid = message.author.id
 
+    # calculate dynamic chance (more annoying = more replies)
+    chance = min(0.15 + (annoyance.get(uid, 0) * 0.10), 0.85)
+
+    if random.random() < chance:
         annoyance[uid] = annoyance.get(uid, 0) + 1
         last_annoy_time[uid] = time.time()
 
         reply = get_fake_reply(uid)
         await send_as_pxghoul(message, reply)
-
-        last_impersonated_user = uid
         return
 
     # ---- NORMAL BOT RESPONSE (only when pinged) ----
@@ -259,3 +255,4 @@ async def on_message(message):
         await message.reply(response)
 
 client.run(os.environ["DISCORD_TOKEN"])
+
