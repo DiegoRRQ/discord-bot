@@ -2,9 +2,12 @@ import discord
 import os
 import time
 import random
+from datetime import datetime
 
 PXGHOUL_ID = 1278727608065986685
 COOLDOWN_SECONDS = 60
+MAX_PINGS = 3
+FAKE_REPLY_CHANCE = 0.10  # 10%
 
 KEY_TRIGGERS = ["key", "keys"]
 KEY_RESPONSE = (
@@ -12,99 +15,167 @@ KEY_RESPONSE = (
     "https://discord.com/channels/1458595915463000147/1459979110481793188"
 )
 
-# Randomized responses by status
-RESPONSES = {
-    "offline": [
-        "Diego is currently offline, please be patient!",
-        "Diego is offline right now, he’ll respond when he’s back.",
-    ],
-    "online": [
-        "Diego will respond as soon as he can, please be patient.",
-        "Diego is around and will reply when he can.",
-    ],
-    "idle": [
-        "Diego will respond as soon as he can, please be patient.",
-        "Diego may be away, but he’ll get back to you.",
-    ],
-    "dnd": [
-        "Diego is currently busy, please be patient and do not @ him again.",
-        "Diego is busy right now, please avoid pinging him.",
-    ],
-}
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.presences = True
+intents.dm_messages = True
 
 client = discord.Client(intents=intents)
 
-# State
+# ---- STATE ----
 ping_cooldowns = {}
+ping_counts = {}
+ignored_users = set()
+
 bot_enabled = True
+ghost_mode = False
+current_mood = "chill"
+last_online_time = None
+
+RESPONSES = {
+    "chill": {
+        "offline": [
+            "Diego is offline right now, please be patient.",
+            "Diego’s not online at the moment."
+        ],
+        "online": [
+            "Diego will respond when he can.",
+            "He’ll get back to you shortly."
+        ],
+        "dnd": [
+            "Diego is busy right now."
+        ]
+    },
+    "busy": {
+        "offline": [
+            "Diego is offline."
+        ],
+        "online": [
+            "Diego is busy, please wait."
+        ],
+        "dnd": [
+            "Diego is currently busy. Do not ping again."
+        ]
+    },
+    "menace": {
+        "offline": [
+            "He’s offline. Don’t wait up."
+        ],
+        "online": [
+            "He saw it. He’ll respond if needed."
+        ],
+        "dnd": [
+            "Do not ping him again."
+        ]
+    }
+}
+
+FAKE_REPLIES = [
+    "yeah give me a bit",
+    "one sec",
+    "i’ll check soon",
+    "busy rn"
+]
 
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
 
 @client.event
+async def on_presence_update(before, after):
+    global last_online_time
+    if after.id == PXGHOUL_ID:
+        if after.status == discord.Status.offline:
+            last_online_time = datetime.utcnow()
+        elif before.status == discord.Status.offline:
+            last_online_time = None
+
+@client.event
 async def on_message(message):
-    global bot_enabled
+    global bot_enabled, ghost_mode, current_mood
 
     if message.author == client.user:
         return
 
     msg = message.content.lower()
 
-    # -------- OWNER-ONLY COMMANDS --------
+    # ---- OWNER COMMANDS ----
     if message.author.id == PXGHOUL_ID:
-        if msg == "!bot off":
-            bot_enabled = False
-            await message.reply("✅ Bot disabled.")
+        if msg == "!ghost on":
+            ghost_mode = True
+            await message.reply("👻 Ghost mode enabled.")
             return
-
-        if msg == "!bot on":
-            bot_enabled = True
-            await message.reply("✅ Bot enabled.")
+        if msg == "!ghost off":
+            ghost_mode = False
+            await message.reply("👻 Ghost mode disabled.")
             return
-
-        if msg == "!status":
-            state = "enabled" if bot_enabled else "disabled"
-            await message.reply(f"ℹ️ Bot is currently **{state}**.")
+        if msg.startswith("!mood "):
+            mood = msg.split(" ", 1)[1]
+            if mood in RESPONSES:
+                current_mood = mood
+                await message.reply(f"🎭 Mood set to **{mood}**.")
             return
 
     if not bot_enabled:
         return
 
-    # -------- KEY / KEYS HANDLER --------
+    # ---- KEY HANDLER ----
     if any(word in msg.split() for word in KEY_TRIGGERS):
         await message.reply(KEY_RESPONSE)
         return
 
-    # -------- PXGHOUL MENTION HANDLER (WITH COOLDOWN) --------
-    if PXGHOUL_ID in [user.id for user in message.mentions]:
-        now = time.time()
-        last_ping = ping_cooldowns.get(message.author.id, 0)
+    # ---- IGNORE SILENTLY ----
+    if message.author.id in ignored_users:
+        return
 
-        if now - last_ping < COOLDOWN_SECONDS:
-            return  # silently ignore spam
+    # ---- PXGHOUL MENTION ----
+    if PXGHOUL_ID in [u.id for u in message.mentions]:
+        now = time.time()
+        last = ping_cooldowns.get(message.author.id, 0)
+
+        if now - last < COOLDOWN_SECONDS:
+            ping_counts[message.author.id] = ping_counts.get(message.author.id, 0) + 1
+            if ping_counts[message.author.id] >= MAX_PINGS:
+                ignored_users.add(message.author.id)
+            return
 
         ping_cooldowns[message.author.id] = now
+        ping_counts[message.author.id] = 1
 
         member = message.guild.get_member(PXGHOUL_ID)
         if not member:
             return
 
-        status = member.status
+        status = member.status.name.lower()
 
-        if status == discord.Status.offline:
-            response = random.choice(RESPONSES["offline"])
-        elif status == discord.Status.dnd:
-            response = random.choice(RESPONSES["dnd"])
-        elif status == discord.Status.idle:
-            response = random.choice(RESPONSES["idle"])
-        else:
-            response = random.choice(RESPONSES["online"])
+        # ---- GHOST MODE ----
+        if ghost_mode:
+            try:
+                dm = await member.create_dm()
+                await dm.send(
+                    f"👻 **Ghost Ping**\n"
+                    f"User: {message.author}\n"
+                    f"Channel: #{message.channel}\n"
+                    f"Message: {message.content}"
+                )
+            except:
+                pass
+            return
+
+        # ---- FAKE AI REPLY ----
+        if status != "dnd" and random.random() < FAKE_REPLY_CHANCE:
+            await message.reply(random.choice(FAKE_REPLIES))
+            return
+
+        # ---- NORMAL RESPONSE ----
+        pool = RESPONSES[current_mood].get(status, RESPONSES[current_mood]["online"])
+        response = random.choice(pool)
+
+        if status == "offline" and last_online_time:
+            delta = datetime.utcnow() - last_online_time
+            mins = int(delta.total_seconds() // 60)
+            response += f"\n(Last online {mins} minutes ago)"
 
         await message.reply(response)
 
