@@ -26,8 +26,3 @@ async def on_message(message):
         await message.channel.send(KEY_RESPONSE)
 
 client.run(os.environ["DISCORD_TOKEN"])
-```
-
-**`requirements.txt`**
-```
-discord.py
