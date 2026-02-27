@@ -53,28 +53,15 @@ RESPONSES = {
 # ---------- FAKE‑ME BRAINS ----------
 
 NONCHALANT = [
-    "ok",
-    "aight",
-    "bet",
-    "works for me",
-    "looks fine",
-    "later"
+    "ok", "aight", "bet", "works for me", "looks fine", "later"
 ]
 
 SASSY = [
-    "scroll up",
-    "check pins",
-    "already answered",
-    "same as before",
-    "nothing changed"
+    "scroll up", "check pins", "already answered", "same as before", "nothing changed"
 ]
 
 MAD = [
-    "stop spamming",
-    "asked already",
-    "not broken",
-    "read",
-    "no"
+    "stop spamming", "asked already", "not broken", "read", "no"
 ]
 
 KEYWORDS = [
@@ -85,41 +72,30 @@ KEYWORDS = [
 
 def should_fakeme_reply(message):
     c = message.content.lower()
-
     if "?" in c:
         return True
-
     if any(w in c for w in KEYWORDS):
         return True
-
     if PXGHOUL_ID in [u.id for u in message.mentions]:
         return True
-
     return False
-
 
 def get_annoyance_level(user_id):
     now = time.time()
     last = last_annoy_time.get(user_id, now)
-
-    # decay annoyance over time
     decay = int((now - last) // ANNOY_DECAY_SECONDS)
     if decay > 0:
         annoyance[user_id] = max(0, annoyance.get(user_id, 0) - decay)
         last_annoy_time[user_id] = now
-
     score = annoyance.get(user_id, 0)
-
     if score >= 6:
         return "mad"
     elif score >= 3:
         return "sass"
     return "chill"
 
-
 def get_fake_reply(user_id):
     level = get_annoyance_level(user_id)
-
     if level == "mad":
         return random.choice(MAD)
     if level == "sass":
@@ -135,19 +111,15 @@ async def get_or_create_webhook(channel):
             return webhook
     return await channel.create_webhook(name="pxghoul-ghost")
 
-
 async def fake_typing_delay(channel):
     async with channel.typing():
         await asyncio.sleep(random.uniform(2.0, 6.0))
-
 
 async def send_as_pxghoul(message, content):
     member = message.guild.get_member(PXGHOUL_ID)
     if not member:
         return
-
     await fake_typing_delay(message.channel)
-
     webhook = await get_or_create_webhook(message.channel)
     await webhook.send(
         content=content,
@@ -185,22 +157,18 @@ async def on_message(message):
             ghost_mode = True
             await message.reply("👻 Ghost mode enabled.")
             return
-
         if msg == "!ghost off":
             ghost_mode = False
             await message.reply("👻 Ghost mode disabled.")
             return
-
         if msg == "!fakeme on":
             fake_me_enabled = True
             await message.reply("😈 Fake‑you mode **ON**.")
             return
-
         if msg == "!fakeme off":
             fake_me_enabled = False
             await message.reply("😴 Fake‑you mode **OFF**.")
             return
-
         if msg == "!fakeme status":
             state = "ON" if fake_me_enabled else "OFF"
             await message.reply(f"🧍‍♂️ Fake‑you mode is **{state}**.")
@@ -228,31 +196,25 @@ async def on_message(message):
         )
         return
 
-# ---- FAKE‑ME GLOBAL ----
-if fake_me_enabled and status != "dnd" and should_fakeme_reply(message):
-    uid = message.author.id
-
-    # calculate dynamic chance (more annoying = more replies)
-    chance = min(0.15 + (annoyance.get(uid, 0) * 0.10), 0.85)
-
-    if random.random() < chance:
-        annoyance[uid] = annoyance.get(uid, 0) + 1
-        last_annoy_time[uid] = time.time()
-
-        reply = get_fake_reply(uid)
-        await send_as_pxghoul(message, reply)
-        return
+    # ---- FAKE‑ME GLOBAL ----
+    if fake_me_enabled and status != "dnd" and should_fakeme_reply(message):
+        uid = message.author.id
+        chance = min(0.15 + (annoyance.get(uid, 0) * 0.10), 0.85)
+        if random.random() < chance:
+            annoyance[uid] = annoyance.get(uid, 0) + 1
+            last_annoy_time[uid] = time.time()
+            reply = get_fake_reply(uid)
+            await send_as_pxghoul(message, reply)
+            return
 
     # ---- NORMAL BOT RESPONSE (only when pinged) ----
     if PXGHOUL_ID in [u.id for u in message.mentions]:
         pool = RESPONSES["chill"].get(status, ["He’ll respond when he can."])
         response = random.choice(pool)
-
         if status == "offline" and last_online_time:
             mins = int((datetime.utcnow() - last_online_time).total_seconds() // 60)
             response += f"\n(Last online {mins}m ago)"
-
         await message.reply(response)
 
+# ---------- RUN ----------
 client.run(os.environ["DISCORD_TOKEN"])
-
