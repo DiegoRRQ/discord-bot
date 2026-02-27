@@ -2,12 +2,15 @@ import discord
 import os
 import time
 import random
+import asyncio
 from datetime import datetime
 
 PXGHOUL_ID = 1278727608065986685
 COOLDOWN_SECONDS = 60
 MAX_PINGS = 3
-FAKE_REPLY_CHANCE = 0.10  # 10%
+
+FAKE_REPLY_CHANCE = 0.25
+WEBHOOK_REPLY_CHANCE = 0.40  # webhook impersonation chance
 
 KEY_TRIGGERS = ["key", "keys"]
 KEY_RESPONSE = (
@@ -32,6 +35,7 @@ bot_enabled = True
 ghost_mode = False
 current_mood = "chill"
 last_online_time = None
+last_impersonated_user = None
 
 RESPONSES = {
     "chill": {
@@ -75,8 +79,41 @@ FAKE_REPLIES = [
     "yeah give me a bit",
     "one sec",
     "i’ll check soon",
-    "busy rn"
+    "busy rn",
+    "give me a minute"
 ]
+
+# ---------- WEBHOOK HELPERS ----------
+
+async def get_or_create_webhook(channel):
+    webhooks = await channel.webhooks()
+    for webhook in webhooks:
+        if webhook.name == "pxghoul-ghost":
+            return webhook
+    return await channel.create_webhook(name="pxghoul-ghost")
+
+
+async def fake_typing_delay(channel):
+    delay = random.uniform(2.0, 6.0)
+    async with channel.typing():
+        await asyncio.sleep(delay)
+
+
+async def send_as_pxghoul(message, content):
+    member = message.guild.get_member(PXGHOUL_ID)
+    if not member:
+        return
+
+    await fake_typing_delay(message.channel)
+
+    webhook = await get_or_create_webhook(message.channel)
+    await webhook.send(
+        content=content,
+        username=member.display_name,
+        avatar_url=member.display_avatar.url
+    )
+
+# ---------- EVENTS ----------
 
 @client.event
 async def on_ready():
@@ -93,7 +130,7 @@ async def on_presence_update(before, after):
 
 @client.event
 async def on_message(message):
-    global bot_enabled, ghost_mode, current_mood
+    global ghost_mode, current_mood, last_impersonated_user
 
     if message.author == client.user:
         return
@@ -106,10 +143,12 @@ async def on_message(message):
             ghost_mode = True
             await message.reply("👻 Ghost mode enabled.")
             return
+
         if msg == "!ghost off":
             ghost_mode = False
             await message.reply("👻 Ghost mode disabled.")
             return
+
         if msg.startswith("!mood "):
             mood = msg.split(" ", 1)[1]
             if mood in RESPONSES:
@@ -125,7 +164,7 @@ async def on_message(message):
         await message.reply(KEY_RESPONSE)
         return
 
-    # ---- IGNORE SILENTLY ----
+    # ---- SILENT IGNORE ----
     if message.author.id in ignored_users:
         return
 
@@ -163,12 +202,18 @@ async def on_message(message):
                 pass
             return
 
-        # ---- FAKE AI REPLY ----
-        if status != "dnd" and random.random() < FAKE_REPLY_CHANCE:
-            await message.reply(random.choice(FAKE_REPLIES))
+        # ---- WEBHOOK IMPERSONATION ----
+        if (
+            status != "dnd"
+            and random.random() < WEBHOOK_REPLY_CHANCE
+            and message.author.id != last_impersonated_user
+        ):
+            fake = random.choice(FAKE_REPLIES)
+            await send_as_pxghoul(message, fake)
+            last_impersonated_user = message.author.id
             return
 
-        # ---- NORMAL RESPONSE ----
+        # ---- NORMAL BOT RESPONSE ----
         pool = RESPONSES[current_mood].get(status, RESPONSES[current_mood]["online"])
         response = random.choice(pool)
 
