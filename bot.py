@@ -6,10 +6,12 @@ import asyncio
 from datetime import datetime
 
 PXGHOUL_ID = 1278727608065986685
+
 COOLDOWN_SECONDS = 60
 MAX_PINGS = 3
+WEBHOOK_REPLY_CHANCE = 0.45
 
-WEBHOOK_REPLY_CHANCE = 0.40
+ANNOY_DECAY_SECONDS = 180  # annoyance decays every 3 minutes
 
 KEY_TRIGGERS = ["key", "keys"]
 KEY_RESPONSE = (
@@ -36,58 +38,93 @@ last_online_time = None
 last_impersonated_user = None
 fake_me_enabled = False
 
+# annoyance tracking
+annoyance = {}          # user_id -> score
+last_annoy_time = {}    # user_id -> timestamp
+
 RESPONSES = {
     "chill": {
         "offline": ["Diego is offline right now."],
         "online": ["He’ll respond when he can."],
         "dnd": ["Diego is busy right now."]
-    },
-    "busy": {
-        "offline": ["Diego is offline."],
-        "online": ["Diego is busy."],
-        "dnd": ["Do not ping again."]
-    },
-    "menace": {
-        "offline": ["He’s offline. Don’t wait up."],
-        "online": ["He saw it."],
-        "dnd": ["Stop pinging."]
     }
 }
 
-# ---------- NONCHALANT BRAIN ----------
+# ---------- FAKE‑ME BRAINS ----------
 
-def get_nonchalant_reply(content):
-    c = content.lower()
+NONCHALANT = [
+    "ok",
+    "aight",
+    "bet",
+    "works for me",
+    "looks fine",
+    "later"
+]
 
-    if any(w in c for w in ["broken", "bug", "error", "issue"]):
-        return random.choice([
-            "works for me",
-            "probably user error",
-            "looks fine"
-        ])
+SASSY = [
+    "scroll up",
+    "check pins",
+    "already answered",
+    "same as before",
+    "nothing changed"
+]
 
-    if any(w in c for w in ["when", "eta", "soon", "update"]):
-        return random.choice([
-            "later",
-            "eventually",
-            "when i get to it"
-        ])
+MAD = [
+    "stop spamming",
+    "asked already",
+    "not broken",
+    "read",
+    "no"
+]
 
-    if any(w in c for w in ["help", "how", "fix"]):
-        return random.choice([
-            "check pins",
-            "read above",
-            "scroll up"
-        ])
+KEYWORDS = [
+    "broken", "bug", "error", "issue",
+    "when", "eta", "update",
+    "fix", "help", "how", "why", "script"
+]
 
-    if any(w in c for w in ["you there", "hello", "yo", "ping"]):
-        return random.choice([
-            "yeah",
-            "sup",
-            "chill"
-        ])
+def should_fakeme_reply(message):
+    c = message.content.lower()
 
-    return random.choice(["ok", "aight", "bet"])
+    if "?" in c:
+        return True
+
+    if any(w in c for w in KEYWORDS):
+        return True
+
+    if PXGHOUL_ID in [u.id for u in message.mentions]:
+        return True
+
+    return False
+
+
+def get_annoyance_level(user_id):
+    now = time.time()
+    last = last_annoy_time.get(user_id, now)
+
+    # decay annoyance over time
+    decay = int((now - last) // ANNOY_DECAY_SECONDS)
+    if decay > 0:
+        annoyance[user_id] = max(0, annoyance.get(user_id, 0) - decay)
+        last_annoy_time[user_id] = now
+
+    score = annoyance.get(user_id, 0)
+
+    if score >= 6:
+        return "mad"
+    elif score >= 3:
+        return "sass"
+    return "chill"
+
+
+def get_fake_reply(user_id):
+    level = get_annoyance_level(user_id)
+
+    if level == "mad":
+        return random.choice(MAD)
+    if level == "sass":
+        return random.choice(SASSY)
+    return random.choice(NONCHALANT)
 
 # ---------- WEBHOOK HELPERS ----------
 
@@ -135,7 +172,7 @@ async def on_presence_update(before, after):
 
 @client.event
 async def on_message(message):
-    global ghost_mode, current_mood, last_impersonated_user, fake_me_enabled
+    global ghost_mode, fake_me_enabled, last_impersonated_user
 
     if message.author == client.user:
         return
@@ -152,13 +189,6 @@ async def on_message(message):
         if msg == "!ghost off":
             ghost_mode = False
             await message.reply("👻 Ghost mode disabled.")
-            return
-
-        if msg.startswith("!mood "):
-            mood = msg.split(" ", 1)[1]
-            if mood in RESPONSES:
-                current_mood = mood
-                await message.reply(f"🎭 Mood set to **{mood}**.")
             return
 
         if msg == "!fakeme on":
@@ -184,45 +214,42 @@ async def on_message(message):
     if message.author.id in ignored_users:
         return
 
-    # ---- PXGHOUL MENTION ----
+    member = message.guild.get_member(PXGHOUL_ID)
+    if not member:
+        return
+
+    status = member.status.name.lower()
+
+    # ---- GHOST MODE ----
+    if ghost_mode and PXGHOUL_ID in [u.id for u in message.mentions]:
+        await member.send(
+            f"👻 Ghost ping from **{message.author}** in #{message.channel}\n"
+            f"{message.content}"
+        )
+        return
+
+    # ---- FAKE‑ME GLOBAL ----
+    if (
+        fake_me_enabled
+        and status != "dnd"
+        and should_fakeme_reply(message)
+        and random.random() < WEBHOOK_REPLY_CHANCE
+        and message.author.id != last_impersonated_user
+    ):
+        uid = message.author.id
+
+        annoyance[uid] = annoyance.get(uid, 0) + 1
+        last_annoy_time[uid] = time.time()
+
+        reply = get_fake_reply(uid)
+        await send_as_pxghoul(message, reply)
+
+        last_impersonated_user = uid
+        return
+
+    # ---- NORMAL BOT RESPONSE (only when pinged) ----
     if PXGHOUL_ID in [u.id for u in message.mentions]:
-        now = time.time()
-        last = ping_cooldowns.get(message.author.id, 0)
-
-        if now - last < COOLDOWN_SECONDS:
-            ping_counts[message.author.id] = ping_counts.get(message.author.id, 0) + 1
-            if ping_counts[message.author.id] >= MAX_PINGS:
-                ignored_users.add(message.author.id)
-            return
-
-        ping_cooldowns[message.author.id] = now
-        ping_counts[message.author.id] = 1
-
-        member = message.guild.get_member(PXGHOUL_ID)
-        status = member.status.name.lower()
-
-        # ---- GHOST MODE ----
-        if ghost_mode:
-            await member.send(
-                f"👻 Ghost ping from **{message.author}** in #{message.channel}\n"
-                f"{message.content}"
-            )
-            return
-
-        # ---- FAKE‑ME WEBHOOK ----
-        if (
-            fake_me_enabled
-            and status != "dnd"
-            and random.random() < WEBHOOK_REPLY_CHANCE
-            and message.author.id != last_impersonated_user
-        ):
-            reply = get_nonchalant_reply(message.content)
-            await send_as_pxghoul(message, reply)
-            last_impersonated_user = message.author.id
-            return
-
-        # ---- NORMAL BOT RESPONSE ----
-        pool = RESPONSES[current_mood].get(status, RESPONSES[current_mood]["online"])
+        pool = RESPONSES["chill"].get(status, ["He’ll respond when he can."])
         response = random.choice(pool)
 
         if status == "offline" and last_online_time:
