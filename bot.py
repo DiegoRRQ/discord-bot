@@ -3,7 +3,6 @@ import os
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 client = discord.Client(intents=intents)
 
 KEY_TRIGGERS = ["key", "keys"]
@@ -19,6 +18,6 @@ async def on_message(message):
         return
     msg = message.content.lower()
     if any(word in msg.split() for word in KEY_TRIGGERS):
-        await message.channel.send(KEY_RESPONSE)
+        await message.reply(KEY_RESPONSE)
 
 client.run(os.environ["DISCORD_TOKEN"])
