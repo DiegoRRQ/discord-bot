@@ -9,8 +9,7 @@ PXGHOUL_ID = 1278727608065986685
 COOLDOWN_SECONDS = 60
 MAX_PINGS = 3
 
-FAKE_REPLY_CHANCE = 0.25
-WEBHOOK_REPLY_CHANCE = 0.40  # webhook impersonation chance
+WEBHOOK_REPLY_CHANCE = 0.40
 
 KEY_TRIGGERS = ["key", "keys"]
 KEY_RESPONSE = (
@@ -31,57 +30,64 @@ ping_cooldowns = {}
 ping_counts = {}
 ignored_users = set()
 
-bot_enabled = True
 ghost_mode = False
 current_mood = "chill"
 last_online_time = None
 last_impersonated_user = None
+fake_me_enabled = False
 
 RESPONSES = {
     "chill": {
-        "offline": [
-            "Diego is offline right now, please be patient.",
-            "Diego’s not online at the moment."
-        ],
-        "online": [
-            "Diego will respond when he can.",
-            "He’ll get back to you shortly."
-        ],
-        "dnd": [
-            "Diego is busy right now."
-        ]
+        "offline": ["Diego is offline right now."],
+        "online": ["He’ll respond when he can."],
+        "dnd": ["Diego is busy right now."]
     },
     "busy": {
-        "offline": [
-            "Diego is offline."
-        ],
-        "online": [
-            "Diego is busy, please wait."
-        ],
-        "dnd": [
-            "Diego is currently busy. Do not ping again."
-        ]
+        "offline": ["Diego is offline."],
+        "online": ["Diego is busy."],
+        "dnd": ["Do not ping again."]
     },
     "menace": {
-        "offline": [
-            "He’s offline. Don’t wait up."
-        ],
-        "online": [
-            "He saw it. He’ll respond if needed."
-        ],
-        "dnd": [
-            "Do not ping him again."
-        ]
+        "offline": ["He’s offline. Don’t wait up."],
+        "online": ["He saw it."],
+        "dnd": ["Stop pinging."]
     }
 }
 
-FAKE_REPLIES = [
-    "yeah give me a bit",
-    "one sec",
-    "i’ll check soon",
-    "busy rn",
-    "give me a minute"
-]
+# ---------- NONCHALANT BRAIN ----------
+
+def get_nonchalant_reply(content):
+    c = content.lower()
+
+    if any(w in c for w in ["broken", "bug", "error", "issue"]):
+        return random.choice([
+            "works for me",
+            "probably user error",
+            "looks fine"
+        ])
+
+    if any(w in c for w in ["when", "eta", "soon", "update"]):
+        return random.choice([
+            "later",
+            "eventually",
+            "when i get to it"
+        ])
+
+    if any(w in c for w in ["help", "how", "fix"]):
+        return random.choice([
+            "check pins",
+            "read above",
+            "scroll up"
+        ])
+
+    if any(w in c for w in ["you there", "hello", "yo", "ping"]):
+        return random.choice([
+            "yeah",
+            "sup",
+            "chill"
+        ])
+
+    return random.choice(["ok", "aight", "bet"])
 
 # ---------- WEBHOOK HELPERS ----------
 
@@ -94,9 +100,8 @@ async def get_or_create_webhook(channel):
 
 
 async def fake_typing_delay(channel):
-    delay = random.uniform(2.0, 6.0)
     async with channel.typing():
-        await asyncio.sleep(delay)
+        await asyncio.sleep(random.uniform(2.0, 6.0))
 
 
 async def send_as_pxghoul(message, content):
@@ -130,7 +135,7 @@ async def on_presence_update(before, after):
 
 @client.event
 async def on_message(message):
-    global ghost_mode, current_mood, last_impersonated_user
+    global ghost_mode, current_mood, last_impersonated_user, fake_me_enabled
 
     if message.author == client.user:
         return
@@ -156,15 +161,26 @@ async def on_message(message):
                 await message.reply(f"🎭 Mood set to **{mood}**.")
             return
 
-    if not bot_enabled:
-        return
+        if msg == "!fakeme on":
+            fake_me_enabled = True
+            await message.reply("😈 Fake‑you mode **ON**.")
+            return
+
+        if msg == "!fakeme off":
+            fake_me_enabled = False
+            await message.reply("😴 Fake‑you mode **OFF**.")
+            return
+
+        if msg == "!fakeme status":
+            state = "ON" if fake_me_enabled else "OFF"
+            await message.reply(f"🧍‍♂️ Fake‑you mode is **{state}**.")
+            return
 
     # ---- KEY HANDLER ----
     if any(word in msg.split() for word in KEY_TRIGGERS):
         await message.reply(KEY_RESPONSE)
         return
 
-    # ---- SILENT IGNORE ----
     if message.author.id in ignored_users:
         return
 
@@ -183,33 +199,25 @@ async def on_message(message):
         ping_counts[message.author.id] = 1
 
         member = message.guild.get_member(PXGHOUL_ID)
-        if not member:
-            return
-
         status = member.status.name.lower()
 
         # ---- GHOST MODE ----
         if ghost_mode:
-            try:
-                dm = await member.create_dm()
-                await dm.send(
-                    f"👻 **Ghost Ping**\n"
-                    f"User: {message.author}\n"
-                    f"Channel: #{message.channel}\n"
-                    f"Message: {message.content}"
-                )
-            except:
-                pass
+            await member.send(
+                f"👻 Ghost ping from **{message.author}** in #{message.channel}\n"
+                f"{message.content}"
+            )
             return
 
-        # ---- WEBHOOK IMPERSONATION ----
+        # ---- FAKE‑ME WEBHOOK ----
         if (
-            status != "dnd"
+            fake_me_enabled
+            and status != "dnd"
             and random.random() < WEBHOOK_REPLY_CHANCE
             and message.author.id != last_impersonated_user
         ):
-            fake = random.choice(FAKE_REPLIES)
-            await send_as_pxghoul(message, fake)
+            reply = get_nonchalant_reply(message.content)
+            await send_as_pxghoul(message, reply)
             last_impersonated_user = message.author.id
             return
 
@@ -218,9 +226,8 @@ async def on_message(message):
         response = random.choice(pool)
 
         if status == "offline" and last_online_time:
-            delta = datetime.utcnow() - last_online_time
-            mins = int(delta.total_seconds() // 60)
-            response += f"\n(Last online {mins} minutes ago)"
+            mins = int((datetime.utcnow() - last_online_time).total_seconds() // 60)
+            response += f"\n(Last online {mins}m ago)"
 
         await message.reply(response)
 
