@@ -30,7 +30,6 @@ async def on_message(message):
     # -------- KEY / KEYS HANDLER --------
     if any(word in msg.split() for word in KEY_TRIGGERS):
         await message.reply(KEY_RESPONSE)
-        await message.add_reaction("🔑")  # change emoji if you want
         return
 
     # -------- PXGHOUL MENTION HANDLER --------
